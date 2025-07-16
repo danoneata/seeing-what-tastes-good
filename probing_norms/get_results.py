@@ -3,12 +3,14 @@ import json
 import pickle
 import pdb
 import os
+import random
 import sys
 
 from collections import Counter
 from functools import partial
 from itertools import combinations
 
+import altair as alt
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -17,21 +19,35 @@ import streamlit as st
 from adjustText import adjust_text
 from matplotlib import gridspec
 from matplotlib import pyplot as plt
+from sklearn.cluster import HDBSCAN
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 from sklearn.metrics import (
     accuracy_score,
+    calinski_harabasz_score,
+    davies_bouldin_score,
     f1_score,
     mean_absolute_error,
     mean_squared_error,
-    root_mean_squared_error,
     precision_score,
     r2_score,
     recall_score,
     roc_auc_score,
+    root_mean_squared_error,
+    silhouette_score,
 )
+from umap import UMAP
 from tqdm import tqdm
 
 from probing_norms.data import DIR_LOCAL, load_mcrae_x_things
-from probing_norms.utils import cache_df, cache_json, read_json, read_file, multimap
+from probing_norms.utils import (
+    cache_df,
+    cache_json,
+    cache_np,
+    read_json,
+    read_file,
+    multimap,
+)
 from probing_norms.scripts.prepare_mcrae_norms_grouped import (
     load_feature_new_to_features_mcrae,
 )
@@ -285,7 +301,11 @@ def load_result(
 
 
 def load_result_features(
-    classifier_type, embeddings_level, split_type, feature_type, norms_type,
+    classifier_type,
+    embeddings_level,
+    split_type,
+    feature_type,
+    norms_type,
 ):
     """Aggregates results for all features."""
 
@@ -694,7 +714,11 @@ def get_results_per_metacategory_binder():
     ]
     fig = plot_results_per_metacategory(results, models, order_metacategory, metric)
     # fig.savefig("output/plots/per-metacategory-binder.pdf", bbox_inches="tight")
-    fig.savefig("output/plots/per-metacategory-binder.pdf", bbox_inches="tight", transparent=True)
+    fig.savefig(
+        "output/plots/per-metacategory-binder.pdf",
+        bbox_inches="tight",
+        transparent=True,
+    )
     # fig.savefig("output/plots/per-metacategory-binder.png", bbox_inches="tight", transparent=True, dpi=800)
 
 
@@ -889,7 +913,456 @@ def get_classifiers_agreement_binder_norms():
     df.to_csv("output/classifier-agreement-binder-norms-2.csv")
 
 
-def get_results_paper_table_main_row(*models, norm_types=None):
+class LoadClassifiers:
+    def __init__(self, classifier_type, embeddings_level, split_type, norms_type):
+        self.classifier_type = classifier_type
+        self.embeddings_level = embeddings_level
+        self.split_type = split_type
+        self.norms_type = norms_type
+
+        self.norms_loader = NORMS_LOADERS[norms_type]()
+        _, self.feature_to_id, self.features_selected = self.norms_loader()
+
+    def clf_to_numpy(self, clf):
+        w = clf.coef_.squeeze()
+        b = clf.intercept_
+        return np.hstack((w, b))
+
+    def load_clfs(self, path):
+        with open(path + ".pkl", "rb") as f:
+            res = pickle.load(f)
+        return [self.clf_to_numpy(r["clf"]) for r in res]
+
+    def load_clfs_feature(self, model, feature_id):
+        path = OUTPUT_PATH.format(
+            self.classifier_type,
+            self.embeddings_level,
+            self.split_type,
+            DATASET_NAME,
+            model,
+            self.norms_type,
+            feature_id,
+        )
+        return self.load_clfs(path)
+
+    def load_clfs_features(self, model):
+        clfs = [
+            clf
+            for feature in tqdm(self.features_selected)
+            for clf in self.load_clfs_feature(model, self.feature_to_id[feature])
+        ]
+        return np.stack(clfs)
+
+    def __call__(self, model, to_use_intercept=True, to_l2_normalize=True):
+        X = cache_np(
+            "tmp/clfs-{}.npy".format(model),
+            self.load_clfs_features,
+            self.classifier_type,
+            self.embeddings_level,
+            self.split_type,
+            model,
+            self.norms_type,
+        )
+
+        if not to_use_intercept:
+            X = X[:, :-1]
+
+        if to_l2_normalize:
+            norm = np.linalg.norm(X, axis=1, keepdims=True)
+            X = X / norm
+
+        return X
+
+
+def analyse_classifiers():
+    from probing_norms.scripts.eval_norm_correlations import (
+        get_best_supercategory_matches,
+    )
+
+    load_classifiers = LoadClassifiers(
+        classifier_type="linear-probe",
+        embeddings_level="concept",
+        split_type="repeated-k-fold",
+        norms_type="mcrae-x-things",
+    )
+
+    PROJ_METHODS = {
+        "UMAP": UMAP,
+        "PCA": PCA,
+        "t-SNE": TSNE,
+    }
+
+    AGG_FUNCS = {
+        "mean": lambda xs: np.mean(xs, axis=0),
+        "first": lambda xs: xs[0],
+        "none": None,
+    }
+
+    MODELS = [
+        "random-siglip",
+        "dino-v2",
+        "swin-v2-ssl",
+        "clip",
+        "pali-gemma-224",
+        "siglip-224",
+        "clip-word",
+        "gemma-2b-contextual-layers-9-to-18-seq-last-word",
+    ]
+    MODEL_NAMES = [FEATURE_NAMES[m] for m in MODELS]
+
+    def aggregate(values, labels, func):
+        if func is None:
+            return values, labels
+        else:
+            labels_agg = sorted(set(labels))
+            labels = np.array(labels)
+            label_to_values = {label: values[labels == label] for label in labels_agg}
+            values_agg = [func(label_to_values[label]) for label in labels_agg]
+            values_agg = np.vstack(values_agg)
+            return values_agg, labels_agg
+
+    METRICS = {
+        "silhouette": silhouette_score,
+        "davies-bouldin": davies_bouldin_score,
+        "calinski-harabasz": calinski_harabasz_score,
+    }
+
+    def evaluate(X, y):
+        return {m: METRICS[m](X, y) for m in METRICS}
+
+    st.set_page_config(layout="wide")
+
+    with st.sidebar:
+        model_name = st.selectbox(
+            "Model", MODEL_NAMES, index=MODEL_NAMES.index("CLIP (image)")
+        )
+        proj_method_name = st.selectbox(
+            "Projection method",
+            list(PROJ_METHODS.keys()),
+            help="How to project the classifier weights into 2D space.",
+        )
+        to_use_intercept = st.checkbox(
+            "Use intercept",
+            value=True,
+            help="Whether to use the intercept term as part of the classifier weights.",
+        )
+        to_l2_normalize = st.checkbox(
+            "L2 normalize",
+            value=True,
+            help="Whether to L2 normalize the classifier weights (corresponds to using cosine similarity).",
+        )
+        agg_classifiers = st.selectbox(
+            "Aggregate classifiers",
+            list(AGG_FUNCS.keys()),
+            help="We train ten classifiers for each attribute based on two 2 × 5-fold cross validation splits. How to aggregate them.",
+        )
+        st.markdown("---")
+        st.markdown("### Clustering hyperparameters")
+        clustering_space = st.selectbox("Clustering space", ["original", "UMAP"])
+        if clustering_space == "UMAP":
+            clustering_space_dim = st.number_input(
+                "Clustering space dimension",
+                min_value=2,
+                value=10,
+            )
+        else:
+            clustering_space_dim = None
+        min_cluster_size = st.number_input(
+            "Minimum cluster size",
+            min_value=2,
+            # max_value=100,
+            value=5,
+        )
+        min_samples = st.number_input(
+            "Minimum samples",
+            min_value=1,
+            # max_value=100,
+            value=min_cluster_size,
+        )
+
+    path = "/tmp/attribute-to-supercategory.json"
+    attribute_to_supercategory_and_score = cache_json(
+        path,
+        get_best_supercategory_matches,
+        load_classifiers.norms_type,
+    )
+    attribute_to_supercategory = {
+        a: cs[0] for a, cs in attribute_to_supercategory_and_score.items()
+    }
+    attribute_to_supercategory_score = {
+        a: cs[1] for a, cs in attribute_to_supercategory_and_score.items()
+    }
+
+    model = MODELS[MODEL_NAMES.index(model_name)]
+    Proj = PROJ_METHODS[proj_method_name]
+
+    taxonomy = load_taxonomy_mcrae_x_things()
+    features_selected = load_classifiers.features_selected
+    X = load_classifiers(model, to_use_intercept, to_l2_normalize)
+    F = [feature for feature in features_selected for _ in range(10)]
+    X1, F = aggregate(X, F, AGG_FUNCS[agg_classifiers])
+
+    proj = Proj(n_components=2)
+    X2 = proj.fit_transform(X1)
+
+    df = pd.DataFrame(X2, columns=["x₁", "x₂"])
+    df["feature"] = F
+    df["taxonomy"] = df["feature"].map(taxonomy)
+    df["supercategory"] = df["feature"].map(attribute_to_supercategory)
+    df["supercategory-score"] = df["feature"].map(attribute_to_supercategory_score)
+
+    # Y = df["taxonomy"].values
+    # scores = evaluate(X1, Y)
+    # st.write(scores)
+
+    W = 400
+    H = 350
+
+    def make_fig(type_):
+        TYPES_STR = {
+            "taxonomy:N": "attribute type",
+            "supercategory:N": "supercategory",
+        }
+        selector = alt.selection_interval(empty=True)
+        tooltip = ["feature", "taxonomy", "supercategory", "supercategory-score"]
+
+        if type_ == "taxonomy:N":
+            kwargs = {}
+        else:
+            kwargs = {"opacity": "supercategory-score:Q"}
+
+        fig1 = (
+            alt.Chart(df)
+            .mark_circle(size=60)
+            .add_params(selector)
+            .encode(
+                x=alt.X("x₁:Q").scale(zero=False),
+                y=alt.Y("x₂:Q").scale(zero=False),
+                color=type_,
+                tooltip=tooltip,
+                **kwargs,
+            )
+            .properties(
+                width=W,
+                height=H,
+                title="Color denotes {}. Select area to zoom in.".format(TYPES_STR[type_]),
+            )
+        )
+
+        fig2 = (
+            alt.Chart(df)
+            .mark_text()
+            .encode(
+                x=alt.X("x₁:Q").scale(zero=False),
+                y=alt.Y("x₂:Q").scale(zero=False),
+                text="feature",
+                opacity=alt.condition(selector, alt.value(1.0), alt.value(0.0)),
+                tooltip=tooltip,
+            )
+            .transform_filter(selector)
+            .interactive()
+            .properties(
+                width=W,
+                height=H,
+                title="Attribute names in the selected area",
+            )
+        )
+
+        fig = fig1 | fig2
+        fig = fig.configure_legend(
+            title=None,
+            orient="right",
+        ).configure_view(
+            strokeWidth=0,
+        )
+        return fig
+
+    fig1 = make_fig("taxonomy:N")
+    st.altair_chart(fig1)
+
+    fig2 = make_fig("supercategory:N")
+    st.altair_chart(fig2)
+
+    if clustering_space == "original":
+        X3 = X1
+    else:
+        proj = UMAP(n_components=clustering_space_dim)
+        X3 = proj.fit_transform(X1)
+
+    C = HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples).fit_predict(
+        X3
+    )
+    df["cluster"] = C
+
+    selection = alt.selection_point(
+        fields=["cluster"],
+        bind="legend",
+        # empty="all",
+    )
+    fig3 = (
+        alt.Chart(df)
+        .mark_circle(size=60)
+        .encode(
+            x=alt.X("x₁:Q").scale(zero=False),
+            y=alt.Y("x₂:Q").scale(zero=False),
+            color=alt.Color("cluster:N", title="HDBSCAN cluster"),
+            # shape=alt.Shape("taxonomy:N", title="Taxonomy"),
+            tooltip=["feature", "taxonomy", "cluster"],
+            opacity=alt.condition(selection, alt.value(1.0), alt.value(0.2)),
+        )
+        .interactive()
+        .properties(
+            width=1.5 * W,
+            height=1.5 * H,
+            title="HDBSCAN clusters",
+        )
+        .add_params(selection)
+    )
+
+    fig3 = fig3.configure_legend(
+        title=None,
+        orient="right",
+    ).configure_view(
+        strokeWidth=0,
+    )
+
+    st.altair_chart(fig3)
+
+    num_clusters = len(set(C))
+    has_noise = -1 in C
+    num_noisy_samples = sum(C == -1)
+    frac_noise_samples = 100 * num_noisy_samples / len(C)
+
+    st.markdown(
+        """
+    - Number of clusters: {}
+    - Number of clusters (without noise category): {}
+    - Number of noisy samples: {}
+    - Fraction of noisy samples: {:.1f}%
+    """.format(
+            num_clusters,
+            num_clusters - (1 if has_noise else 0),
+            num_noisy_samples,
+            frac_noise_samples,
+        )
+    )
+
+
+def analyse_classifiers_quantiative(labels_type):
+    from probing_norms.scripts.eval_norm_correlations import (
+        get_best_supercategory_matches,
+    )
+
+    load_classifiers = LoadClassifiers(
+        classifier_type="linear-probe",
+        embeddings_level="concept",
+        split_type="repeated-k-fold",
+        norms_type="mcrae-x-things",
+    )
+
+    AGG_FUNCS = {
+        "mean": lambda xs: np.mean(xs, axis=0),
+        "first": lambda xs: xs[0],
+        "none": None,
+    }
+
+    MODELS = [
+        "random-siglip",
+        "dino-v2",
+        "swin-v2-ssl",
+        "clip",
+        "pali-gemma-224",
+        "siglip-224",
+        "clip-word",
+        "gemma-2b-contextual-layers-9-to-18-seq-last-word",
+    ]
+
+    def load_supercategory():
+        data = cache_json(
+            "/tmp/attribute-to-supercategory.json",
+            get_best_supercategory_matches,
+            "mcrae-x-things",
+        )
+        return {a: cs[0] for a, cs in data.items()}
+
+    ATTRIBUTE_TO_LABEL = {
+        "taxonomy": load_taxonomy_mcrae_x_things,
+        "supercategory": load_supercategory,
+    }
+
+    def aggregate(values, labels, func):
+        if func is None:
+            return values, labels
+        else:
+            labels_agg = sorted(set(labels))
+            labels = np.array(labels)
+            label_to_values = {label: values[labels == label] for label in labels_agg}
+            values_agg = [func(label_to_values[label]) for label in labels_agg]
+            values_agg = np.vstack(values_agg)
+            return values_agg, labels_agg
+
+    METRICS = {
+        "silhouette": silhouette_score,
+        "davies-bouldin": davies_bouldin_score,
+        "calinski-harabasz": calinski_harabasz_score,
+    }
+
+    def evaluate(X, y):
+        return {m: METRICS[m](X, y) for m in METRICS}
+
+    # taxonomy = load_taxonomy_mcrae_x_things()
+    attribute_to_label = ATTRIBUTE_TO_LABEL[labels_type]()
+    features_selected = load_classifiers.features_selected
+
+    def do1(model, i, to_shuffle_labels=False):
+        X = load_classifiers(model, to_use_intercept=True, to_l2_normalize=True)
+        F = [feature for feature in features_selected for _ in range(10)]
+        I = [i for _ in features_selected for i in range(10)]
+
+        F = np.array(F)
+        I = np.array(I)
+
+        X = X[I == i]
+        F = F[I == i]
+
+        # X, F = aggregate(X, F, AGG_FUNCS["mean"])
+        T = [attribute_to_label[f] for f in F]
+        if to_shuffle_labels:
+            random.shuffle(T)
+
+        return evaluate(X, T)
+
+    bools = [False, True]
+    results = [
+        {
+            "model": model,
+            "shuffle labels?": to_shuffle,
+            "i": i,
+            **do1(model, i, to_shuffle),
+        }
+        for model in MODELS
+        for i in range(5)
+        for to_shuffle in bools
+    ]
+    df = pd.DataFrame(results)
+
+    df = df.groupby(["model", "shuffle labels?"]).mean()
+    df = df.reset_index()
+
+    df = df.pivot_table(
+        index="model",
+        columns="shuffle labels?",
+        values=list(METRICS.keys()),
+    )
+    df = df.reindex(MODELS)
+    df = df.reset_index()
+    df["model"] = df["model"].map(FEATURE_NAMES)
+
+    st.write(df)
+    st.markdown("```\n" + df.to_csv() + "\n```")
+
+
+def get_results_paper_table_main_row(*modCels, norm_types=None):
     assert len(models) > 0, "At least one model must be provided."
 
     classifier_type = "linear-probe"
@@ -1001,8 +1474,7 @@ def get_results_paper_table_main_acl_camera_ready(*models):
 
     def row_to_string(row):
         return " & ".join(
-            [row["model"].item()]
-            + concat(row_to_string_1(row, s) for s in SETTINGS)
+            [row["model"].item()] + concat(row_to_string_1(row, s) for s in SETTINGS)
         )
 
     print(" \\\\ \n".join([row_to_string(row) for _, row in df.iterrows()]))
@@ -1057,7 +1529,9 @@ def get_results_paper_table_full_main_acl_camera_ready():
         if "score-f1-selectivity" in metrics:
             norm_type = settings["norms_type"]
             scores_random_features = get_score_random_features(norm_type)
-            df["score-f1-selectivity"] = df["score-f1"] - df["feature"].map(scores_random_features)
+            df["score-f1-selectivity"] = df["score-f1"] - df["feature"].map(
+                scores_random_features
+            )
 
         cols = ["model"] + metrics
         df = df[cols]
@@ -1078,7 +1552,11 @@ def get_results_paper_table_full_main_acl_camera_ready():
     def row_to_string(row):
         return " & ".join(
             [row["model"].item()]
-            + [row_to_string_1(row, s["norms_type"], m) for s in SETTINGS for m in s["metrics"]]
+            + [
+                row_to_string_1(row, s["norms_type"], m)
+                for s in SETTINGS
+                for m in s["metrics"]
+            ]
         )
 
     print(" \\\\ \n".join([row_to_string(row) for _, row in df.iterrows()]))
@@ -1312,7 +1790,9 @@ def compare_two_models_scatterplot_ax(ax, model1, model2, legend="auto"):
     add_texts(ax, df)
     if legend:
         # sns.move_legend(ax, "lower right", bbox_to_anchor=(1, 1), ncol=2, title="")
-        sns.move_legend(ax, "upper left", bbox_to_anchor=(1, 1), ncol=1, title="", framealpha=0.0)
+        sns.move_legend(
+            ax, "upper left", bbox_to_anchor=(1, 1), ncol=1, title="", framealpha=0.0
+        )
     ax.plot([0, 100], [0, 100], color="gray", linestyle="--")
     ax.set_xlabel("F1 selectivity · {}".format(FEATURE_NAMES[model1]))
     ax.set_ylabel("F1 selectivity · {}".format(FEATURE_NAMES[model2]))
@@ -1345,6 +1825,7 @@ def compare_two_models_scatterplot_2():
     fig.savefig(
         f"output/plots/scatterplot-model-comparison.pdf",
         bbox_inches="tight",
+        transparent=True,
     )
 
 
@@ -1386,8 +1867,8 @@ def get_correlation_between_models(norms_type):
     ]
     cols = ["feature", "model", "score-f1"]
     # feature_to_random_score = {
-        # feature: get_score_random(norms_loader, feature)
-        # for feature in norms_loader.load_concepts()
+    # feature: get_score_random(norms_loader, feature)
+    # for feature in norms_loader.load_concepts()
     # }
 
     df = pd.DataFrame(results)
@@ -1524,13 +2005,15 @@ def get_correlation_between_models_2():
 
     fig.savefig(
         f"output/plots/correlation-between-models.png",
+        bbox_inches="tight",
         transparent=True,
         dpi=800,
     )
-    # fig.savefig(
-    #     f"output/plots/correlation-between-models.pdf",
-    #     bbox_inches="tight",
-    # )
+    fig.savefig(
+        f"output/plots/correlation-between-models.pdf",
+        bbox_inches="tight",
+        transparent=True,
+    )
 
 
 def prepare_results_for_stella():
@@ -1896,15 +2379,24 @@ def show_ranking_plot():
         "text": "crest_r",
     }
     num_models = Counter([FEATURE_TYPE_TO_MODALITY[m] for m in MAIN_TABLE_MODELS])
-    modality_to_palette = {modality: sns.color_palette(modality_to_color[modality], num_models[modality]) for modality in modalities}
+    modality_to_palette = {
+        modality: sns.color_palette(modality_to_color[modality], num_models[modality])
+        for modality in modalities
+    }
     modality_to_models = {
-        modality: [model for model in MAIN_TABLE_MODELS if modality == FEATURE_TYPE_TO_MODALITY[model]]
+        modality: [
+            model
+            for model in MAIN_TABLE_MODELS
+            if modality == FEATURE_TYPE_TO_MODALITY[model]
+        ]
         for modality in modalities
     }
     palette = {
         model: color
         for modality in modalities
-        for model, color in zip(modality_to_models[modality], modality_to_palette[modality])
+        for model, color in zip(
+            modality_to_models[modality], modality_to_palette[modality]
+        )
     }
 
     sns.set(style="whitegrid", font="Arial")
@@ -1955,6 +2447,8 @@ FUNCS = {
     "per-metacategory-binder": get_results_per_metacategory_binder,
     "binder-norms": get_results_binder_norms,
     "classifier-agreement-binder-norms": get_classifiers_agreement_binder_norms,
+    "analyse-classifiers": analyse_classifiers,
+    "analyse-classifiers-quantitative": analyse_classifiers_quantiative,
     "paper-table-main-row": get_results_paper_table_main_row,
     "paper-table-main": get_results_paper_table_main,
     "paper-table-main-acl-camera-ready": get_results_paper_table_main_acl_camera_ready,
