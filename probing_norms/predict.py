@@ -572,14 +572,18 @@ def main(classifier_type, embeddings_level, feature_type, norms_type, split_type
 
     def cache_clf_and_preds(path, func, *args):
         path_json = path + ".json"
-        if os.path.exists(path_json):
+        path_clfs = path + ".pkl"
+        json_exists = os.path.exists(path_json)
+        # clfs_exists = os.path.exists(path_clfs)
+        # both_exist = json_exists and clfs_exists
+        if json_exists:
             return
         else:
             results = func(*args)
             save_preds(path_json, results)
             # Avoid saving classifiers for KNN since it stores the whole data!
             # if classifier_type != "knn-3":
-            #     save_clfs(path, results)
+            #     save_clfs(path_clfs, results)
 
     def process_feature(feature):
         classifier_labels = get_labels_func(
