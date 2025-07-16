@@ -5,7 +5,7 @@ from collections import defaultdict
 
 import pandas as pd
 
-from probing_norms.predict import McRaeMappedNormsLoader
+from probing_norms.predict import NORMS_LOADERS
 from probing_norms.get_results import (
     FEATURE_NAMES,
     MAIN_TABLE_MODELS,
@@ -128,14 +128,14 @@ def load_result_features_1(model):
     return results
 
 
-def get_best_supercategory_matches():
+def get_best_supercategory_matches(norms_loader_type="mcrae-mapped"):
     """Matches each feature to a supercategory based on the feature's category set.
     We use the supercategory with the highest intersection with the feature's category set,
     which is later normalized by the size of the category set.
     """
 
     supercategories = get_supercategories()
-    norms_loader = McRaeMappedNormsLoader()
+    norms_loader = NORMS_LOADERS[norms_loader_type]()
     feature_to_concepts, _, features_selected = norms_loader()
     feature_to_concepts = {
         f: set(cs) for f, cs in feature_to_concepts.items() if f in features_selected
