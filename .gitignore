@@ -1,4 +1,10 @@
 __pycache__
 *egg-info
 output
+config/azure-openai-api-key.json
 data/imagenet12-32x32
+data/things-images-cc0-sm
+data/glove
+data/numberbatch
+static/
+tmp/
