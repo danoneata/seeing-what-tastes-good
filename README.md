@@ -43,8 +43,15 @@ Then you can install this code as a library with:
 pip install -e .
 ```
 
-The path to the THINGS dataset can be set using the environment variable `DIR_THINGS` (see the [`probing-norms/data.py`](https://github.com/danoneata/seeing-what-tastes-good/blob/master/probing_norms/data.py#L30) script);
-for example,
+**Data.**
+You will need to download the [THINGS dataset](https://osf.io/jum2f/files/osfstorage), for example using `wget`:
+```bash
+wget https://files.osf.io/v1/resources/jum2f/providers/osfstorage/?zip= -O things.zip
+```
+
+The code assumes that the THINGS dataset is located at `data/things-data`.
+If you want to use a different path, you can set using the `DIR_THINGS` environment variable (see the [`probing-norms/data.py`](https://github.com/danoneata/seeing-what-tastes-good/blob/master/probing_norms/data.py#L30) script);
+for example:
 ```bash
 export DIR_THINGS=/path/to/things
 ```

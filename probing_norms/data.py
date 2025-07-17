@@ -26,7 +26,7 @@ DIR_GPT3_NORMS = "/home/doneata/work/semantic-features-gpt-3"
 DIR_GPT3_NORMS = os.environ.get("DIR_GPT3_NORMS", DIR_GPT3_NORMS)
 DIR_GPT3_NORMS = Path(DIR_GPT3_NORMS)
 
-DIR_THINGS = Path("/mnt/private-share/speechDatabases/THINGS")
+DIR_THINGS = Path("data/things-dataset")
 DIR_THINGS = os.environ.get("DIR_THINGS", DIR_THINGS)
 
 DIR_IMAGENET = Path("/mnt/private-share/speechDatabases/imagenet12")
