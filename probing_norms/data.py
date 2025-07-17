@@ -27,7 +27,10 @@ DIR_GPT3_NORMS = os.environ.get("DIR_GPT3_NORMS", DIR_GPT3_NORMS)
 DIR_GPT3_NORMS = Path(DIR_GPT3_NORMS)
 
 DIR_THINGS = Path("/mnt/private-share/speechDatabases/THINGS")
+DIR_THINGS = os.environ.get("DIR_THINGS", DIR_THINGS)
+
 DIR_IMAGENET = Path("/mnt/private-share/speechDatabases/imagenet12")
+DIR_IMAGENET = os.environ.get("DIR_IMAGENET", DIR_IMAGENET)
 
 
 FEATURE_NORMS_OPTIONS = {
