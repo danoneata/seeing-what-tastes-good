@@ -15,7 +15,11 @@ import numpy as np
 import pandas as pd
 
 from sklearn.linear_model import LinearRegression, LogisticRegression
-from sklearn.model_selection import train_test_split, RepeatedStratifiedKFold, RepeatedKFold
+from sklearn.model_selection import (
+    train_test_split,
+    RepeatedStratifiedKFold,
+    RepeatedKFold,
+)
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import make_pipeline
@@ -259,11 +263,70 @@ def get_train_test_split_k_fold_simple(
     return {feature: get_f(feature) for feature in features}
 
 
+def get_train_test_split_k_fold_instance(
+    labels,
+    features,
+    *,
+    feature_to_concepts,
+    class_to_label,
+    n_splits=5,
+    n_repeats=2,
+):
+    """Replicate the k-fold split that was is on concepts by
+    `get_train_test_split_k_fold`, but at instance level (the label corresponds
+    to an image, not to a concept).
+
+    Given `labels` of the form:
+    - [0, 0, 0, 1, 1, 2, 3, 3, 3, 4, 4]
+
+    Splits will correspond to something like this:
+    - [0, 0, 0, 2, 3, 3, 3, 4, 4]
+    - [1, 1]
+
+    Note that the split contains indicies, so they will be:
+    - [0, 1, 2, 5, 6, 7, 8, 9, 10]
+    - [3, 4]
+
+    """
+    labels_unique = np.sort(np.unique(labels))
+
+    def get_idxs_orig(idxs):
+        """Find the indicies corresponding to the original `labels`."""
+        labels_selected = labels_unique[idxs]
+        (idxs_orig,) = np.where(np.isin(labels, labels_selected))
+        assert np.all(np.sort(np.unique(labels[idxs_orig])) == np.sort(labels_selected))
+        return idxs_orig
+
+    def get_f(feature):
+        binary_labels = get_binary_labels(
+            labels_unique,
+            feature,
+            feature_to_concepts,
+            class_to_label,
+        )
+        rskf = RepeatedStratifiedKFold(
+            n_splits=n_splits,
+            n_repeats=n_repeats,
+            random_state=42,
+        )
+        return [
+            Split(
+                get_idxs_orig(tr_idxs),
+                get_idxs_orig(te_idxs),
+                metadata={"feature": feature},
+            )
+            for tr_idxs, te_idxs in rskf.split(binary_labels, binary_labels)
+        ]
+
+    return {feature: get_f(feature) for feature in features}
+
+
 GET_TRAIN_TEST_SPLIT = {
     "iid-fixed": get_train_test_split_iid_fixed,
     "leave-one-concept-out": get_train_test_split_leave_one_out,
     "repeated-k-fold": get_train_test_split_k_fold,
     "repeated-k-fold-simple": get_train_test_split_k_fold_simple,
+    "repeated-k-fold-instance": get_train_test_split_k_fold_instance,
 }
 
 
@@ -513,9 +576,14 @@ CLASSIFIERS = {
     required=True,
 )
 def main(classifier_type, embeddings_level, feature_type, norms_type, split_type):
-    assert implies(classifier_type == "linear-regression", split_type != "repeated-k-fold")
+    assert implies(
+        classifier_type == "linear-regression", split_type != "repeated-k-fold"
+    )
     assert implies(classifier_type == "linear-regression", norms_type == "binder-dense")
     assert implies(norms_type == "binder-dense", classifier_type == "linear-regression")
+    assert implies(
+        split_type == "repeated-k-fold-instance", embeddings_level == "instance"
+    )
 
     dataset_name = "things"
     dataset = DATASETS[dataset_name]()
@@ -564,7 +632,7 @@ def main(classifier_type, embeddings_level, feature_type, norms_type, split_type
         data = [{k: r[k] for k in ("split", "preds")} for r in results]
         with open(path, "w") as f:
             json.dump(data, f, indent=4)
- 
+
     def save_clfs(path, results):
         data = [{k: r[k] for k in ("split", "clf")} for r in results]
         with open(path, "wb") as f:

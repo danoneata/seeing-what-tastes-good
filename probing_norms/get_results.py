@@ -39,7 +39,7 @@ from sklearn.metrics import (
 from umap import UMAP
 from tqdm import tqdm
 
-from probing_norms.data import DIR_LOCAL, load_mcrae_x_things
+from probing_norms.data import DIR_LOCAL, DATASETS, load_mcrae_x_things
 from probing_norms.utils import (
     cache_df,
     cache_json,
@@ -51,7 +51,11 @@ from probing_norms.utils import (
 from probing_norms.scripts.prepare_mcrae_norms_grouped import (
     load_feature_new_to_features_mcrae,
 )
-from probing_norms.predict import NORMS_LOADERS, FEATURE_TYPE_TO_MODALITY
+from probing_norms.predict import (
+    NORMS_LOADERS,
+    FEATURE_TYPE_TO_MODALITY,
+    get_binary_labels,
+)
 
 NORMS_MODEL = "chatgpt-gpt3.5-turbo"
 DATASET_NAME = "things"
@@ -80,6 +84,7 @@ SCORE_FUNCS = {
 SPLIT_TO_SCORE_FUNCS = {
     "leave-one-concept-out": ["score-accuracy"],
     "repeated-k-fold": ["score-precision", "score-recall", "score-f1"],
+    "repeated-k-fold-instance": ["score-precision", "score-recall", "score-f1"],
 }
 
 FEATURE_TYPES = [
@@ -378,26 +383,53 @@ def load_result_random_predictor(norms_loader):
     ]
 
 
-def get_score_random(norms_loader, feature):
-    feature_to_concepts, _, _ = norms_loader()
-    num_concepts_total = len(norms_loader.load_concepts())
-    num_concepts = len(set(feature_to_concepts[feature]))
-    return 100 * num_concepts / num_concepts_total
+def get_score_random_features_concept_level(norms_type):
+    norms_loader = NORMS_LOADERS[norms_type]()
+    _, _, features_selected = norms_loader()
+
+    def get1(feature):
+        feature_to_concepts, _, _ = norms_loader()
+        num_concepts_total = len(norms_loader.load_concepts())
+        num_concepts = len(set(feature_to_concepts[feature]))
+        return 100 * num_concepts / num_concepts_total
+
+    return {feature: get1(feature) for feature in tqdm(features_selected)}
 
 
-def get_score_random_features(norms_type):
-    path = f"tmp/score-random-{norms_type}.json"
-    if not os.path.exists(path):
-        norms_loader = NORMS_LOADERS[norms_type]()
-        _, _, features_selected = norms_loader()
+def get_score_random_features_instance_level(norms_type):
+    norms_loader = NORMS_LOADERS[norms_type]()
+    feature_to_concepts, _, features_selected = norms_loader()
+    dataset = DATASETS["things"]()
 
-    def do():
-        return {
-            feature: get_score_random(norms_loader, feature)
-            for feature in features_selected
-        }
+    def get1(feature):
+        binary_labels = get_binary_labels(
+            dataset.labels,
+            feature,
+            feature_to_concepts,
+            dataset.class_to_label,
+        )
+        return 100 * np.mean(binary_labels)
 
-    return cache_json(path, do)
+    return {feature: get1(feature) for feature in tqdm(features_selected)}
+
+
+def get_score_random_features(norms_type, embeddings_level="concept"):
+    """Estimates the performance of a random predictor on each of the
+    features.
+
+    """
+    PATHS = {
+        "concept": f"tmp/score-random-{norms_type}.json",
+        "instance": f"tmp/score-random-{norms_type}-instance.json",
+    }
+    FUNCS = {
+        "concept": get_score_random_features_concept_level,
+        "instance": get_score_random_features_instance_level,
+    }
+
+    path = PATHS[embeddings_level]
+    func = FUNCS[embeddings_level]
+    return cache_json(path, func, norms_type)
 
 
 def load_taxonomy_mcrae_x_things():
@@ -1145,7 +1177,9 @@ def analyse_classifiers():
             .properties(
                 width=W,
                 height=H,
-                title="Color denotes {}. Select area to zoom in.".format(TYPES_STR[type_]),
+                title="Color denotes {}. Select area to zoom in.".format(
+                    TYPES_STR[type_]
+                ),
             )
         )
 
@@ -2436,6 +2470,81 @@ def show_ranking_plot():
     fig.savefig("output/plots/ranking-plot.pdf", bbox_inches="tight", transparent=True)
 
 
+def get_results_instance_level(*models):
+    METRIC = "score-f1-selectivity"
+    SETTINGS = [
+        {
+            "classifier_type": "linear-probe",
+            "embeddings_level": "instance",
+            "split_type": "repeated-k-fold-instance",
+            "norms_type": "mcrae-x-things",
+            "metric": METRIC,
+        },
+        {
+            "classifier_type": "linear-probe",
+            "embeddings_level": "concept",
+            "split_type": "repeated-k-fold",
+            "norms_type": "mcrae-x-things",
+            "metric": METRIC,
+        },
+    ]
+
+    def get_results_1(models, metric, **settings):
+        results = [
+            result
+            for model in models
+            for result in load_result_features(feature_type=model, **settings)
+        ]
+        df = pd.DataFrame(results)
+
+        if metric == "score-f1-selectivity":
+            norm_type = settings["norms_type"]
+            scores_random_features = get_score_random_features(
+                norm_type, settings["embeddings_level"]
+            )
+            df[metric] = df["score-f1"] - df["feature"].map(scores_random_features)
+
+        return df
+
+    if len(models) == 0:
+        models = MAIN_TABLE_MODELS
+
+    cols = ["model", "feature", "level", METRIC]
+    dfs = {s["embeddings_level"]: get_results_1(models, **s) for s in SETTINGS}
+    df = pd.concat(dfs, axis=0)
+    df = df[cols]
+
+    # For each model, find top 5 and bottom 5 features with largest difference
+    # between concept and instance F₁ selectivity.
+    df_pivot = df.pivot_table(
+        index=["model", "feature"], columns="level", values=METRIC
+    ).reset_index()
+
+    df_pivot["diff"] = df_pivot["concept"] - df_pivot["instance"]
+
+    def get_top5(model):
+        df_model = df_pivot[df_pivot["model"] == model]
+        df_model = df_model.sort_values("diff", ascending=False)
+        top5 = df_model.head(5)
+        # bot5 = df_model.tail(5)
+        # selected10 = pd.concat([top5, bot5])
+        return ", ".join(
+            "{} ({:.2f})".format(row["feature"], row["diff"])
+            for _, row in top5.iterrows()
+        )
+
+    model_to_top5 = {model: get_top5(model) for model in models}
+
+    df = df.groupby(["model", "level"])[METRIC].mean()
+    df = df.reset_index()
+    df = df.pivot(index="model", columns="level", values=METRIC)
+    df = df.reindex(models)
+    df = df.reset_index()
+    df["top5"] = df["model"].map(model_to_top5)
+    df["model"] = df["model"].map(lambda x: FEATURE_NAMES.get(x, x))
+    print(df.to_csv(sep="|"))
+
+
 FUNCS = {
     "levels-and-splits": get_results_levels_and_splits,
     "per-metacategory": partial(
@@ -2475,6 +2584,7 @@ FUNCS = {
         metric=metric,
     ),
     "ranking-plot": show_ranking_plot,
+    "results-instance": get_results_instance_level,
 }
 
 
