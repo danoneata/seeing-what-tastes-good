@@ -333,6 +333,7 @@ def load_result_features(
             for feature in tqdm(features_selected)
         ]
 
+    os.makedirs("tmp", exist_ok=True)
     path = "tmp/{}-{}-{}-{}-{}.json".format(
         classifier_type,
         embeddings_level,
@@ -427,6 +428,7 @@ def get_score_random_features(norms_type, embeddings_level="concept"):
         "instance": get_score_random_features_instance_level,
     }
 
+    os.makedirs("tmp", exist_ok=True)
     path = PATHS[embeddings_level]
     func = FUNCS[embeddings_level]
     return cache_json(path, func, norms_type)
@@ -986,6 +988,7 @@ class LoadClassifiers:
         return np.stack(clfs)
 
     def __call__(self, model, to_use_intercept=True, to_l2_normalize=True):
+        os.makedirs("tmp", exist_ok=True)
         X = cache_np(
             "tmp/clfs-{}.npy".format(model),
             self.load_clfs_features,
