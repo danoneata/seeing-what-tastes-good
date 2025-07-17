@@ -43,7 +43,7 @@ Then you can install this code as a library with:
 pip install -e .
 ```
 
-The path to the THINGS dataset can be set using the environment variable `DIR_THINGS` (see the [`probing-norms/data.py`](probing-norms/data.py) script);
+The path to the THINGS dataset can be set using the environment variable `DIR_THINGS` (see the [`probing-norms/data.py`](https://github.com/danoneata/seeing-what-tastes-good/blob/master/probing_norms/data.py#L30) script);
 for example,
 ```bash
 export DIR_THINGS=/path/to/things
