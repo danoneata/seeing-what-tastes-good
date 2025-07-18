@@ -182,3 +182,20 @@ python probing_norms/get_results.py per-metacategory-binder
 ```bash
 streamlit run probing_norms/scripts/show_results_per_feature_norm_v2.py
 ```
+
+## Code structure
+
+The main scripts are:
+
+- `probing_norms/extract_features_image.py`: Extract features from vision models
+- `probing_norms/extract_features_text.py`: Extract features from language models
+- `probing_norms/predict.py`: Train linear probes for attribute prediction
+- `probing_norms/get_results.py`: Generate results and tables from trained models
+- `probing_norms/data.py`: Data loading and processing utilities
+- `probing_norms/utils.py`: Common utility functions
+
+The code caches information along the way. This information is typically saved to:
+
+- `output/`: Trained classifiers and their predictions.
+- `tmp/`: Aggregated results per attribute.
+
