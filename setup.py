@@ -32,5 +32,6 @@ setup(
         "open_clip_torch",
         "qwen-vl-utils",
         "inflect",
+        "umap-learn",
     ],
 )
