@@ -180,6 +180,7 @@ SCORE_NAMES = {
     "score-recall": "Recall",
     "score-f1": "F1",
     "score-f1-selectivity": "F1 selectivity",
+    "score-f1-selectivity-norm": "F1 selectivity (norm)",
     "score-roc-auc": "ROC AUC",
     "score-mse": "MSE",
     "score-rmse": "RMSE",
@@ -190,6 +191,7 @@ SCORE_NAMES = {
 
 METRIC_TO_FMT = {
     "score-f1-selectivity": "{:.1f}",
+    "score-f1-selectivity-norm": "{:.1f}",
     "score-f1": "{:.1f}",
     "score-precision": "{:.1f}",
     "score-recall": "{:.1f}",
@@ -555,7 +557,7 @@ def get_results_levels_and_splits():
 
 
 def plot_results_per_metacategory(
-    results, order_models=None, order_metacategory=None, metric=None
+    results, order_models=None, order_metacategory=None, metric=None,
 ):
     metric = metric or "score-f1-selectivity"
 
@@ -1450,6 +1452,28 @@ def get_results_paper_table_main_row(*modCels, norm_types=None):
     print(df.to_latex(float_format="%.1f", index=False))
 
 
+def compute_f1_sel_df(df, norms_type, **_):
+    scores_random_features = get_score_random_features(norms_type)
+    return df["score-f1"] - df["feature"].map(scores_random_features)
+
+
+def compute_f1_sel_norm_df(df, norms_type, **_):
+    scores_random_features = get_score_random_features(norms_type)
+    num = df["score-f1"] - df["feature"].map(scores_random_features)
+    den = 100 - df["feature"].map(scores_random_features)
+    return 100 * num / den
+
+
+COMPUTE_METRICS = {
+    "score-f1-selectivity": compute_f1_sel_df,
+    "score-f1-selectivity-norm": compute_f1_sel_norm_df,
+}
+
+def add_metric(df, metric, **kwargs):
+    df[metric] = COMPUTE_METRICS[metric](df, **kwargs)
+    return df
+
+
 def get_results_paper_table_main_acl_camera_ready(*models):
     SETTINGS = [
         {
@@ -1476,10 +1500,8 @@ def get_results_paper_table_main_acl_camera_ready(*models):
         ]
         df = pd.DataFrame(results)
 
-        if metric == "score-f1-selectivity":
-            norm_type = settings["norms_type"]
-            scores_random_features = get_score_random_features(norm_type)
-            df[metric] = df["score-f1"] - df["feature"].map(scores_random_features)
+        if metric in COMPUTE_METRICS:
+            df = add_metric(df, **settings)
 
         cols = ["model", metric]
         df = df[cols]
@@ -1732,7 +1754,8 @@ def compare_two_models_scatterplot_ax(ax, model1, model2, legend="auto"):
     embeddings_level = "concept"
     splits_type = "repeated-k-fold"
     norms_type = "mcrae-x-things"
-    norms_loader = NORMS_LOADERS[norms_type]()
+    # norms_loader = NORMS_LOADERS[norms_type]()
+    metric = "score-f1-selectivity"
     taxonomy = load_taxonomy_mcrae()
 
     results = [
@@ -1743,18 +1766,11 @@ def compare_two_models_scatterplot_ax(ax, model1, model2, legend="auto"):
         )
     ]
 
-    random_scores = get_score_random_features(norms_type)
-    for r in results:
-        r["score-f1-selectivity"] = r["score-f1"] - random_scores[r["feature"]]
-
-    # for r in results:
-    #     score_random = get_score_random(norms_loader, r["feature"])
-    #     r["score-f1-selectivity"] = r["score-f1"] - score_random
-
     df = pd.DataFrame(results)
+    df = add_metric(df, metric, norms_type=norms_type)
     df["metacategory"] = df["feature"].map(taxonomy)
     df["metacategory"] = df["metacategory"].map(lambda x: METACATEGORY_NAMES.get(x, x))
-    cols = ["feature", "metacategory", "model", "score-f1-selectivity"]
+    cols = ["feature", "metacategory", "model", metric]
     df = df[cols]
     df = df.set_index(["feature", "metacategory", "model"]).unstack(-1)
     df = df.reset_index()
@@ -1771,8 +1787,8 @@ def compare_two_models_scatterplot_ax(ax, model1, model2, legend="auto"):
 
     def add_texts(ax, df):
         cols = [
-            f"score-f1-selectivity-{model1}",
-            f"score-f1-selectivity-{model2}",
+            f"{metric}-{model1}",
+            f"{metric}-{model2}",
             "feature",
         ]
         points = df[cols].values.tolist()
@@ -1816,8 +1832,8 @@ def compare_two_models_scatterplot_ax(ax, model1, model2, legend="auto"):
     metacategories = sorted(df["metacategory"].unique())
     sns.scatterplot(
         df,
-        x=f"score-f1-selectivity-{model1}",
-        y=f"score-f1-selectivity-{model2}",
+        x=f"{metric}-{model1}",
+        y=f"{metric}-{model2}",
         hue="metacategory",
         hue_order=metacategories,
         # marker="metacategory",
@@ -1831,8 +1847,8 @@ def compare_two_models_scatterplot_ax(ax, model1, model2, legend="auto"):
             ax, "upper left", bbox_to_anchor=(1, 1), ncol=1, title="", framealpha=0.0
         )
     ax.plot([0, 100], [0, 100], color="gray", linestyle="--")
-    ax.set_xlabel("F1 selectivity · {}".format(FEATURE_NAMES[model1]))
-    ax.set_ylabel("F1 selectivity · {}".format(FEATURE_NAMES[model2]))
+    ax.set_xlabel("{} · {}".format(SCORE_NAMES[metric], FEATURE_NAMES[model1]))
+    ax.set_ylabel("{} · {}".format(SCORE_NAMES[metric], FEATURE_NAMES[model2]))
     ax.set_aspect("equal", adjustable="box")
 
 
@@ -2474,6 +2490,7 @@ def show_ranking_plot():
 
 
 def get_results_instance_level(*models):
+    # METRIC = "score-f1"
     METRIC = "score-f1-selectivity"
     SETTINGS = [
         {
@@ -2500,12 +2517,8 @@ def get_results_instance_level(*models):
         ]
         df = pd.DataFrame(results)
 
-        if metric == "score-f1-selectivity":
-            norm_type = settings["norms_type"]
-            scores_random_features = get_score_random_features(
-                norm_type, settings["embeddings_level"]
-            )
-            df[metric] = df["score-f1"] - df["feature"].map(scores_random_features)
+        if metric in COMPUTE_METRICS:
+            df = add_metric(df, **settings)
 
         return df
 
