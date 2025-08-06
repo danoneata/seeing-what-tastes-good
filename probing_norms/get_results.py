@@ -1401,7 +1401,7 @@ def analyse_classifiers_quantiative(labels_type):
     st.markdown("```\n" + df.to_csv() + "\n```")
 
 
-def get_results_paper_table_main_row(*modCels, norm_types=None):
+def get_results_paper_table_main_row(*models, norm_types=None):
     assert len(models) > 0, "At least one model must be provided."
 
     classifier_type = "linear-probe"
