@@ -1502,7 +1502,7 @@ def get_results_paper_table_main_acl_camera_ready(*models):
         df = pd.DataFrame(results)
 
         if metric in COMPUTE_METRICS:
-            df = add_metric(df, **settings)
+            df = add_metric(df, metric, **settings)
 
         cols = ["model", metric]
         df = df[cols]
