@@ -354,12 +354,25 @@ class DINOV2(nn.Module):
         
 
 class DINOV3(nn.Module):
-    def __init__(self, variant="vitb16"):
+    def __init__(self, variant, tokens):
         super(DINOV3, self).__init__()
         model_id = f"facebook/dinov3-{variant}-pretrain-lvd1689m"
         self.model = AutoModel.from_pretrained(model_id).eval()
         self.processor = AutoProcessor.from_pretrained(model_id)
         self.feature_dim = self.model.config.hidden_size
+
+        image_size = self.model.config.image_size
+        patch_size = self.model.config.patch_size
+        num_patches_side = image_size // patch_size
+        num_patches = num_patches_side ** 2
+        num_registers = self.model.config.num_register_tokens
+
+        TOKEN_IDXS = {
+            "cls": list(range(0, 1)),
+            "patches": list(range(1 + num_registers, 1 + num_registers + num_patches)),
+        }
+        TOKEN_IDXS["cls-patches"] = TOKEN_IDXS["cls"] + TOKEN_IDXS["patches"]
+        self.token_idxs = TOKEN_IDXS[tokens]
 
     def transform(self, x):
         output = self.processor(images=x, return_tensors="pt")
@@ -369,7 +382,8 @@ class DINOV3(nn.Module):
 
     def forward(self, x):
         features = self.model(x)
-        features = features.pooler_output
+        features = features.last_hidden_state
+        features = features[:, self.token_idxs].mean(1)
         return features
 
 
@@ -378,7 +392,9 @@ FEATURE_EXTRACTORS = {
     # Self supervised models
     "dino-resnet50": partial(ImageBackboneDINO, type_="resnet50"),
     "dino-v2": DINOV2,
-    "dino-v3-vitl16": partial(DINOV3, variant="vitl16"),
+    "dino-v3-vitl16": partial(DINOV3, variant="vitl16", tokens="cls"),
+    "dino-v3-vitl16-patches": partial(DINOV3, variant="vitl16", tokens="patches"),
+    "dino-v3-vitl16-cls-patches": partial(DINOV3, variant="vitl16", tokens="cls-patches"),
     "vit-mae-large": VITMAE,
     # Image-text models
     "clip": partial(CLIP, model_id="openai/clip-vit-large-patch14", tokens="CLS", layer="post-projection"),
