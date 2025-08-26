@@ -33,5 +33,6 @@ setup(
         "qwen-vl-utils",
         "inflect",
         "umap-learn",
+        "adjustText",
     ],
 )
