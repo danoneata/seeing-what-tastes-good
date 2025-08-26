@@ -148,6 +148,7 @@ FEATURE_NAMES = {
     "swin-v2": "Swin-V2 (FT)",
     "swin-v2-ssl": "Swin-V2",
     "dino-v2": "DINOv2",
+    "dino-v3-vitl16": "DINOv3",
     "siglip-224": "SigLIP",
     "pali-gemma-224": "PaliGemma",
     "llava-1.5-7b": "LLaVA-1.5",

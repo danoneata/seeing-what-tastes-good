@@ -351,6 +351,26 @@ class DINOV2(nn.Module):
         features = self.model(x)
         features = features.last_hidden_state.mean(1)
         return features
+        
+
+class DINOV3(nn.Module):
+    def __init__(self, variant="vitb16"):
+        super(DINOV3, self).__init__()
+        model_id = f"facebook/dinov3-{variant}-pretrain-lvd1689m"
+        self.model = AutoModel.from_pretrained(model_id).eval()
+        self.processor = AutoProcessor.from_pretrained(model_id)
+        self.feature_dim = self.model.config.hidden_size
+
+    def transform(self, x):
+        output = self.processor(images=x, return_tensors="pt")
+        output = output["pixel_values"]
+        output = output.squeeze(0)
+        return output
+
+    def forward(self, x):
+        features = self.model(x)
+        features = features.pooler_output
+        return features
 
 
 FEATURE_EXTRACTORS = {
@@ -358,6 +378,7 @@ FEATURE_EXTRACTORS = {
     # Self supervised models
     "dino-resnet50": partial(ImageBackboneDINO, type_="resnet50"),
     "dino-v2": DINOV2,
+    "dino-v3-vitl16": partial(DINOV3, variant="vitl16"),
     "vit-mae-large": VITMAE,
     # Image-text models
     "clip": partial(CLIP, model_id="openai/clip-vit-large-patch14", tokens="CLS", layer="post-projection"),
@@ -393,6 +414,8 @@ def main(dataset_name, feature_type):
     feature_extractor.eval()
     feature_extractor.to(DEVICE)
 
+    # print(count_params(feature_extractor))
+
     BATCH_SIZES = {
         "qwen2.5-vl-3b-instruct": 1,
         "llava-1.5-7b": 64,
@@ -400,7 +423,7 @@ def main(dataset_name, feature_type):
     batch_size = BATCH_SIZES.get(feature_type, 16)
 
     dataset = DATASETS[dataset_name](transform=feature_extractor.transform)
-    dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=4)
+    dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=3)
 
     def extract1(image):
         with torch.no_grad():
