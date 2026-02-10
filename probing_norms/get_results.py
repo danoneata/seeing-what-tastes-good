@@ -107,6 +107,8 @@ MAIN_TABLE_MODELS = [
     "max-vit-large",
     "max-vit-large-in21k",
     "dino-v2",
+    "dino-v3-vitl16",
+    "dino-v3-vitl16-patches",
     "swin-v2-ssl",
     #
     # "clip-dfn2b",
@@ -148,7 +150,8 @@ FEATURE_NAMES = {
     "swin-v2": "Swin-V2 (FT)",
     "swin-v2-ssl": "Swin-V2",
     "dino-v2": "DINOv2",
-    "dino-v3-vitl16": "DINOv3",
+    "dino-v3-vitl16": "DINOv3 (CLS)",
+    "dino-v3-vitl16-patches": "DINOv3 (patches)",
     "siglip-224": "SigLIP",
     "pali-gemma-224": "PaliGemma",
     "llava-1.5-7b": "LLaVA-1.5",
@@ -558,7 +561,10 @@ def get_results_levels_and_splits():
 
 
 def plot_results_per_metacategory(
-    results, order_models=None, order_metacategory=None, metric=None,
+    results,
+    order_models=None,
+    order_metacategory=None,
+    metric=None,
 ):
     metric = metric or "score-f1-selectivity"
 
@@ -1453,6 +1459,78 @@ def get_results_paper_table_main_row(*models, norm_types=None):
     print(df.to_latex(float_format="%.1f", index=False))
 
 
+def get_results_for_isra(*models):
+    models = models or ["dino-v2"]
+    classifier_type = "linear-probe"
+    # embeddings_level = "instance"
+    # split_type = "repeated-k-fold-instance"
+    embeddings_level = "concept"
+    split_type = "repeated-k-fold"
+    norm_type = "mcrae-x-things"
+
+    scores_random_features = get_score_random_features(norm_type)
+    taxonomy = load_taxonomy_mcrae_x_things()
+
+    results = [
+        r
+        for m in models
+        for r in load_result_features(
+            classifier_type, embeddings_level, split_type, m, norm_type
+        )
+    ]
+    cols = [
+        # "model",
+        # "norms-type",
+        "feature",
+        "score-f1",
+        # "score-precision",
+        # "score-recall",
+        "score-f1-selectivity",
+        "score-f1-random",
+    ]
+    df = pd.DataFrame(results)
+    df["score-f1-random"] = df["feature"].map(scores_random_features)
+    df["score-f1-selectivity"] = df["score-f1"] - df["score-f1-random"]
+    df["taxonomy"] = df["feature"].map(taxonomy)
+    # def serr(x):
+    #     return "{:.1f}".format(np.std(x) / np.sqrt(len(x)))
+    # def ci(x):
+    #     return "{:.1f}".format(1.96 * np.std(x) / np.sqrt(len(x)))
+    # print(df[cols])
+    # print(df.groupby("taxonomy")[["score-f1", "score-f1-random"]].agg(["mean"]))
+
+    # print(df.groupby("taxonomy")["score-f1"].agg(["mean", "std", serr, ci]).sort_values("mean", ascending=False))
+    # print(df.groupby("taxonomy")["score-f1-selectivity"].agg(["mean", "std", serr, ci]).sort_values("mean", ascending=False))
+
+    # 2025-09-07
+    ts = {
+        "visual-motion": ["visual-motion"],
+        "visual-form_and_surface": ["visual-form_and_surface"],
+        "taxonomic": ["taxonomic"],
+        "encyclopaedic": ["encyclopaedic"],
+        "sense-non-visual": ["taste", "tactile", "sound", "smell"],
+        "function": ["function"],
+        "visual-colour": ["visual-colour"],
+    }
+    cols = [
+        "feature",
+        "score-f1",
+        "score-f1-random",
+        "taxonomy",
+        "score-f1-selectivity",
+    ]
+    def prep1(t):
+        ts1 = ts[t]
+        df1 = df[df["taxonomy"].isin(ts1)]
+        df1 = df1[cols].sort_values("score-f1", ascending=False)
+        df1 = df1.reset_index(drop=True)
+        return df1
+    dfs = [prep1(t) for t in ts]
+    df = pd.concat(dfs, axis=1)
+    df.to_csv("output/isra-2024-09-07.csv", index=False, na_rep="")
+    print(df)
+
+
 def compute_f1_sel_df(df, norms_type, **_):
     scores_random_features = get_score_random_features(norms_type)
     return df["score-f1"] - df["feature"].map(scores_random_features)
@@ -1469,6 +1547,7 @@ COMPUTE_METRICS = {
     "score-f1-selectivity": compute_f1_sel_df,
     "score-f1-selectivity-norm": compute_f1_sel_norm_df,
 }
+
 
 def add_metric(df, metric, **kwargs):
     df[metric] = COMPUTE_METRICS[metric](df, **kwargs)
@@ -2602,6 +2681,7 @@ FUNCS = {
     ),
     "ranking-plot": show_ranking_plot,
     "results-instance": get_results_instance_level,
+    "results-for-isra": get_results_for_isra,
 }
 
 
