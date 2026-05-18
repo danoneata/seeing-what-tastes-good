@@ -54,7 +54,9 @@ from probing_norms.scripts.prepare_mcrae_norms_grouped import (
 from probing_norms.predict import (
     NORMS_LOADERS,
     FEATURE_TYPE_TO_MODALITY,
+    GET_TRAIN_TEST_SPLIT,
     get_binary_labels,
+    load_embeddings,
 )
 
 NORMS_MODEL = "chatgpt-gpt3.5-turbo"
@@ -2200,19 +2202,35 @@ def prepare_results_for_stella():
         json.dump(results, f, indent=2)
 
 
-def prepare_classifiers_for_stella(model):
-    norms_type = "mcrae-mapped"
+def prepare_classifiers_for_stella(model, norms_type="mcrae-mapped"):
     norms_loader = NORMS_LOADERS[norms_type]()
-    _, feature_to_id, features_selected = norms_loader()
-    level = "concept"
-    split = "repeated-k-fold"
+    feature_to_concepts, feature_to_id, features_selected = norms_loader()
+    embeddings_level = "concept"
+    split_type = "repeated-k-fold"
+
+    dataset_name = "things"
+    dataset = DATASETS[dataset_name]()
+
+    selected_concepts = norms_loader.load_concepts()
+    selected_labels = [dataset.class_to_label[c] for c in selected_concepts]
+
+    _, labels = load_embeddings(dataset_name, model, embeddings_level)
+    idxs = np.isin(labels, selected_labels)
+    labels = labels[idxs]
+
+    splits = GET_TRAIN_TEST_SPLIT[split_type](
+        labels,
+        features_selected,
+        feature_to_concepts=feature_to_concepts,
+        class_to_label=dataset.class_to_label,
+    )
 
     def get_path(feature):
         feature_id = feature_to_id[feature]
         return OUTPUT_PATH.format(
             "linear-probe",
-            level,
-            split,
+            embeddings_level,
+            split_type,
             DATASET_NAME,
             model,
             norms_loader.get_suffix(),
@@ -2223,16 +2241,30 @@ def prepare_classifiers_for_stella(model):
         with open(path + ".pkl", "rb") as f:
             return pickle.load(f)
 
-    def get_clfs(data):
-        return [output["clf"] for output in data]
+    def indices_to_concepts(idxs):
+        return [dataset.label_to_class[labels[i]] for i in idxs]
+
+    def get_clfs(feature):
+        clf_data = load_pickle(get_path(feature))
+        splits1 = splits[feature]
+        return [
+            {
+                "probe": output["clf"],
+                "concepts-train": indices_to_concepts(splits1[i].tr_idxs),
+                "concepts-test": indices_to_concepts(splits1[i].te_idxs),
+            }
+            for i, output in enumerate(clf_data)
+        ]
 
     data = {
-        feature: get_clfs(load_pickle(get_path(feature)))
+        feature: get_clfs(feature)
         for feature in tqdm(features_selected)
     }
 
-    with open(f"output/classifiers-for-stella-{model}.pkl", "wb") as f:
+    path = f"output/classifiers-for-stella-{model}-{norms_type}.pkl"
+    with open(path, "wb") as f:
         pickle.dump(data, f)
+
 
 
 def get_results_multiple_classifiers():
