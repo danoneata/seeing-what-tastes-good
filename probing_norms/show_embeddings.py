@@ -28,17 +28,20 @@ def main():
 
     # SELECTED = ["dino-v2", "pali-gemma-224", "siglip-224", "fasttext-word", "random-siglip", "gemma-2b-word"]
     SELECTED = [
-        "siglip-224",
-        "fasttext-word",
-        "clip-word",
-        "gemma-2b-contextual-last-word",
-        "gemma-2b-contextual-50-last-word",
-        "gemma-2b-contextual-50-constrained-last-word",
-        "gpt2-contextual-last-word",
+        # "siglip-224",
+        # "fasttext-word",
+        # "clip-word",
+        "dino-v2",
+        "dino-v3-vitl16",
+        # "gemma-2b-contextual-last-word",
+        # "gemma-2b-contextual-50-last-word",
+        # "gemma-2b-contextual-50-constrained-last-word",
+        # "gpt2-contextual-last-word",
     ]
     data = {f: load_embeddings(dataset_name, f, "concept") for f in SELECTED}
 
-    norm_loader = NORMS_LOADERS["mcrae-mapped"]()
+    norm_type = "mcrae-x-things"
+    norm_loader = NORMS_LOADERS[norm_type]()
     feature_to_concepts, feature_to_id, features_selected = norm_loader()
 
     with st.sidebar:
