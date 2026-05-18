@@ -23,7 +23,7 @@ concept_to_images = multimap(concept_image)
 norms_loader = NORMS_LOADERS["mcrae-mapped"]()
 feature_to_concepts, _, features_selected = norms_loader()
 concepts = norms_loader.load_concepts()
-contexts = HFModelContextual.load_context("gpt4o_concept")
+contexts = HFModelContextual.load_context("gpt4o_concept_context_sentences_v2")
 concept_feature = [
     (concept, feature)
     for feature, concepts in feature_to_concepts.items()
