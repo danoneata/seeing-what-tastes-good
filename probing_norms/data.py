@@ -98,6 +98,24 @@ def filter_by_things_concepts(df):
     return df
 
 
+def load_nova():
+    path = "data/nova.csv"
+    path = DIR_LOCAL / path
+    df = pd.read_csv(path)
+    df.columns = df.columns.str.strip()
+    df["stimulus"] = df["stimulus"].str.strip()
+
+    concepts_things = read_file(DIR_LOCAL / "data/concepts-things.txt")
+    df = df[df["stimulus"].isin(concepts_things)]
+
+    attributes = [c for c in df.columns if c != "stimulus"]
+    df = df.melt(id_vars="stimulus", value_vars=attributes, var_name="Feature", value_name="Value")
+    df = df[df["Value"] == 1.0]
+
+    concept_feature = df[["stimulus", "Feature"]].values.tolist()
+    return concept_feature
+
+
 def load_binder_dense():
     path = "data/binder-norms.xlsx"
     path = DIR_LOCAL / path

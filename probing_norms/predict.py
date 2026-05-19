@@ -38,6 +38,7 @@ from probing_norms.data import (
     load_binder_feature_norms_median,
     load_mcrae_feature_norms,
     load_mcrae_x_things,
+    load_nova,
     get_feature_to_concepts,
 )
 from probing_norms.utils import cache_json, implies, read_file
@@ -441,6 +442,38 @@ class McRaeXThingsNormsLoader(NormsLoader):
         return str(self.model)
 
 
+class NovaNormsLoader(NormsLoader):
+    def __init__(self):
+        self.model = "nova"
+
+    def load_concepts(self):
+        concept_feature = load_nova()
+        concepts = sorted(set(c for c, _ in concept_feature))
+        return concepts
+
+    def __call__(self, *, num_min_concepts=10):
+        concept_feature = load_nova()
+        feature_to_concepts = get_feature_to_concepts(concept_feature)
+
+        features = sorted(feature_to_concepts.keys())
+        feature_to_id = {feature: i for i, feature in enumerate(features)}
+        num_concepts = len(self.load_concepts())
+
+        features_selected = [
+            norm
+            for norm, concepts in feature_to_concepts.items()
+            if len(concepts) >= num_min_concepts
+            # We also need to exclude features that are associated with too many concepts,
+            # because otherwise the splitting function will give an warning:
+            # there won't be enough negative samples to split.
+            and len(concepts) <= num_concepts - num_min_concepts
+        ]
+        return feature_to_concepts, feature_to_id, features_selected
+
+    def get_suffix(self):
+        return str(self.model)
+
+
 class BinderNormsLoader(NormsLoader):
     def __init__(self, thresh):
         self.model = "binder"
@@ -517,6 +550,7 @@ NORMS_LOADERS = {
     "binder-5": partial(BinderNormsLoader, thresh=5),
     "binder-median": partial(BinderNormsLoader, thresh="median"),
     "binder-dense": BinderDenseNormsLoader,
+    "nova": NovaNormsLoader,
 }
 
 

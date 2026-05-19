@@ -109,8 +109,8 @@ MAIN_TABLE_MODELS = [
     "max-vit-large",
     "max-vit-large-in21k",
     "dino-v2",
-    "dino-v3-vitl16",
-    "dino-v3-vitl16-patches",
+    # "dino-v3-vitl16",
+    # "dino-v3-vitl16-patches",
     "swin-v2-ssl",
     #
     # "clip-dfn2b",
@@ -394,11 +394,10 @@ def load_result_random_predictor(norms_loader):
 
 def get_score_random_features_concept_level(norms_type):
     norms_loader = NORMS_LOADERS[norms_type]()
-    _, _, features_selected = norms_loader()
+    feature_to_concepts, _, features_selected = norms_loader()
+    num_concepts_total = len(norms_loader.load_concepts())
 
     def get1(feature):
-        feature_to_concepts, _, _ = norms_loader()
-        num_concepts_total = len(norms_loader.load_concepts())
         num_concepts = len(set(feature_to_concepts[feature]))
         return 100 * num_concepts / num_concepts_total
 
@@ -1521,12 +1520,14 @@ def get_results_for_isra(*models):
         "taxonomy",
         "score-f1-selectivity",
     ]
+
     def prep1(t):
         ts1 = ts[t]
         df1 = df[df["taxonomy"].isin(ts1)]
         df1 = df1[cols].sort_values("score-f1", ascending=False)
         df1 = df1.reset_index(drop=True)
         return df1
+
     dfs = [prep1(t) for t in ts]
     df = pd.concat(dfs, axis=1)
     df.to_csv("output/isra-2024-09-07.csv", index=False, na_rep="")
@@ -1605,9 +1606,9 @@ def get_results_paper_table_main_acl_camera_ready(*models):
         fmt = METRIC_TO_FMT[m]
         return [
             fmt.format(row[(n, m, "mean")]),
-            r"\annot{" + fmt.format(row[(n, m, "min")]) + r"}",
-            r"\annot{--}",
-            r"\annot{" + fmt.format(row[(n, m, "max")]) + r"}",
+            # r"\annot{" + fmt.format(row[(n, m, "min")]) + r"}",
+            # r"\annot{--}",
+            # r"\annot{" + fmt.format(row[(n, m, "max")]) + r"}",
         ]
 
     def concat(xss):
@@ -1619,6 +1620,80 @@ def get_results_paper_table_main_acl_camera_ready(*models):
         )
 
     print(" \\\\ \n".join([row_to_string(row) for _, row in df.iterrows()]))
+
+
+def plot_mcrae_x_things_vs_nova():
+    SETTINGS = [
+        {
+            "classifier_type": "linear-probe",
+            "embeddings_level": "concept",
+            "split_type": "repeated-k-fold",
+            "norms_type": "mcrae-x-things",
+            "metric": "score-f1-selectivity",
+        },
+        {
+            "classifier_type": "linear-probe",
+            "embeddings_level": "concept",
+            "split_type": "repeated-k-fold",
+            "norms_type": "nova",
+            "metric": "score-f1-selectivity",
+        },
+    ]
+
+    def get_results_1(models, metric, **settings):
+        results = [
+            result
+            for model in models
+            for result in load_result_features(feature_type=model, **settings)
+        ]
+        df = pd.DataFrame(results)
+
+        if metric in COMPUTE_METRICS:
+            df = add_metric(df, metric, **settings)
+
+        cols = ["model", metric]
+        df = df[cols]
+        df = df.groupby("model").aggregate(["mean", "min", "max"])
+        return df
+
+    models = MAIN_TABLE_MODELS
+    models.pop(0)
+
+    dfs = {s["norms_type"]: get_results_1(models, **s) for s in SETTINGS}
+    df = pd.concat(dfs, axis=1)
+    df = df.reindex(models)
+    df = df.reset_index()
+    df["model"] = df["model"].map(lambda x: FEATURE_NAMES.get(x, x))
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    x_col = ("nova", "score-f1-selectivity", "mean")
+    y_col = ("mcrae-x-things", "score-f1-selectivity", "mean")
+    sns.scatterplot(df, x=x_col, y=y_col, ax=ax)
+    # for idx, row in df.iterrows():
+    #     model_name = row["model"].item()
+    #     ax.text(row[x_col], row[y_col], model_name)
+    ax.plot([20, 50], [20, 50], "k--")
+    texts = [
+        ax.text(row[x_col], row[y_col], row["model"].item())
+        for idx, row in df.iterrows()
+    ]
+    xs = df[x_col].values
+    ys = df[y_col].values
+    adjust_text(
+        texts,
+        x=xs,
+        y=ys,
+        ax=ax,
+        # expand=(1.2, 2.1),
+        force_text=(0.2, 0.6),
+        # force_points=1.0,
+        arrowprops=dict(arrowstyle="-", color="k", alpha=0.5),
+    )
+
+    ax.set_xlabel("NOVA")
+    ax.set_ylabel("McRae × THINGS")
+
+    st.pyplot(fig)
 
 
 def get_results_paper_table_full_main_acl_camera_ready():
@@ -2256,15 +2331,11 @@ def prepare_classifiers_for_stella(model, norms_type="mcrae-mapped"):
             for i, output in enumerate(clf_data)
         ]
 
-    data = {
-        feature: get_clfs(feature)
-        for feature in tqdm(features_selected)
-    }
+    data = {feature: get_clfs(feature) for feature in tqdm(features_selected)}
 
     path = f"output/classifiers-for-stella-{model}-{norms_type}.pkl"
     with open(path, "wb") as f:
         pickle.dump(data, f)
-
 
 
 def get_results_multiple_classifiers():
@@ -2714,6 +2785,7 @@ FUNCS = {
     "ranking-plot": show_ranking_plot,
     "results-instance": get_results_instance_level,
     "results-for-isra": get_results_for_isra,
+    "plot-mcrae-x-things-vs-nova": plot_mcrae_x_things_vs_nova,
 }
 
 
