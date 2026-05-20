@@ -2444,7 +2444,7 @@ def aggregate_predictions_for_demo(norms_type):
     path = f"static/demo/predictions-{norms_type}.npz"
     results_np = np.array(results)
     results_np = results_np.astype(np.float32)
-    np.savez(path, results=results_np)
+    np.savez(path, results=results_np, models=MAIN_TABLE_MODELS)
 
 
 def get_results_binder_norms_regression():
