@@ -178,6 +178,7 @@ NORMS_NAMES = {
     "binder-4": "Binder (binarised)",
     "binder-median": "Binder (binarised)",
     "binder-dense": "Binder",
+    "nova": "NOVA",
 }
 
 SCORE_NAMES = {
